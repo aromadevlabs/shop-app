@@ -3,7 +3,7 @@ import {
   Send, Wrench, Plus, BookMarked, MessageSquare, Copy, Check, Trash2, X, Menu,
   Camera, ImagePlus, ListChecks, Package, RotateCcw, Sparkles, CircleCheck, Circle, Upload, Info,
   GraduationCap, Zap, Stethoscope, MessageCircle, ShieldAlert,
-  Store, FileText, Mic, MicOff, ChevronDown,
+  Store, FileText, Mic, MicOff, ChevronDown, Shield, Lock,
 } from "lucide-react";
 
 const SYSTEM_PROMPT_BASE = `You are Throttle Tech, an AI shop assistant for a motorcycle repair business that works on everything from dirt bikes and pit bikes to street bikes and sportbikes (Kawasaki, Honda, and similar makes).
@@ -106,6 +106,7 @@ const SHOP_LOCATIONS = [
 ];
 
 const COMPANY_CODE = "cjshops";
+const ADMIN_CODE = "cjmechsshop";
 
 async function hashPassword(pw) {
   try {
@@ -244,6 +245,15 @@ export default function ThrottleTech() {
   const [signUpError, setSignUpError] = useState(null);
   const [signUpLoading, setSignUpLoading] = useState(false);
   const [shopDataLoaded, setShopDataLoaded] = useState(false);
+
+  // admin panel state
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminCodeInput, setAdminCodeInput] = useState("");
+  const [adminError, setAdminError] = useState(null);
+  const [adminShops, setAdminShops] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const [activeTab, setActiveTab] = useState("chat"); // 'chat' | 'shop' | 'track'
 
@@ -535,6 +545,60 @@ export default function ThrottleTech() {
     setTrackItems([]);
     setShopStatusState("open");
     setJobs([]);
+    setAdminUnlocked(false);
+    setAdminCodeInput("");
+    setAdminError(null);
+  }
+
+  // ---------- Admin panel ----------
+  async function refreshAdminShops() {
+    setAdminLoading(true);
+    try {
+      const res = await window.storage.get("shops-registry", true).catch(() => null);
+      setAdminShops(res ? JSON.parse(res.value) : []);
+    } catch (e) {
+      setAdminError("Couldn't load the shop list.");
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  function handleAdminUnlock() {
+    setAdminError(null);
+    if (adminCodeInput.trim() !== ADMIN_CODE) {
+      setAdminError("Incorrect admin code.");
+      return;
+    }
+    setAdminUnlocked(true);
+    setAdminCodeInput("");
+    refreshAdminShops();
+  }
+
+  async function deleteShopEverywhere(shop) {
+    setDeletingId(shop.id);
+    try {
+      // remove every piece of data scoped to this shop
+      const listRes = await window.storage.list(`${shop.id}::`).catch(() => ({ keys: [] }));
+      const keys = listRes?.keys || [];
+      for (const k of keys) {
+        try { await window.storage.delete(k); } catch (e) {}
+      }
+      // remove the shop from the registry itself
+      const updatedRegistry = adminShops.filter((s) => s.id !== shop.id);
+      await window.storage.set("shops-registry", JSON.stringify(updatedRegistry), true);
+      setAdminShops(updatedRegistry);
+      setShopsRegistry(updatedRegistry);
+      setConfirmDeleteId(null);
+
+      // if you just deleted the shop you're currently signed into, sign out
+      if (session && session.shopId === shop.id) {
+        await handleSignOut();
+      }
+    } catch (e) {
+      setAdminError("Something went wrong deleting that shop — try again.");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   function contextLabel() {
@@ -903,6 +967,7 @@ export default function ThrottleTech() {
     { id: "shop", label: "Shop Assistant", icon: Camera },
     { id: "track", label: "Track Assistant", icon: ListChecks },
     { id: "info", label: "Info", icon: Info },
+    { id: "admin", label: "Admin", icon: Shield },
   ];
 
   const themeVars = {
@@ -1850,6 +1915,126 @@ export default function ThrottleTech() {
               </p>
             </div>
             </div>
+          </div>
+        )}
+
+        {/* ===================== ADMIN ===================== */}
+        {activeTab === "admin" && (
+          <div className="tt-bg-texture relative flex-1 overflow-y-auto px-4 py-5 flex flex-col gap-5">
+            <Shield className="tt-watermark" strokeWidth={0.5} color="var(--offwhite)" />
+
+            {!adminUnlocked ? (
+              <div className="max-w-sm mx-auto mt-10 flex flex-col gap-3 relative z-10">
+                <div className="flex flex-col items-center gap-2 mb-2">
+                  <Lock size={28} style={{ color: "var(--caution)" }} />
+                  <p className="text-sm text-center" style={{ color: "var(--steel)" }}>
+                    Enter the admin code to manage registered shops.
+                  </p>
+                </div>
+                <input
+                  type="password"
+                  value={adminCodeInput}
+                  onChange={(e) => setAdminCodeInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAdminUnlock()}
+                  placeholder="Admin code"
+                  className="w-full rounded px-3 py-2.5 text-sm outline-none text-center"
+                  style={{ backgroundColor: "var(--panel)", border: "1px solid var(--panel-border)", color: "var(--offwhite)" }}
+                />
+                {adminError && <p className="text-sm text-center" style={{ color: "var(--mw-red)" }}>{adminError}</p>}
+                <button
+                  onClick={handleAdminUnlock}
+                  className="tt-btn w-full py-2.5 rounded font-medium text-sm"
+                  style={{ backgroundColor: "var(--mw-red)", color: "#161616" }}
+                >
+                  Unlock
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold" style={{ color: "var(--offwhite)" }}>Registered Shops</h2>
+                    <p className="text-sm" style={{ color: "var(--steel)" }}>
+                      Deleting a shop permanently removes its login, chats, notes, tracker, and job board.
+                    </p>
+                  </div>
+                  <button
+                    onClick={refreshAdminShops}
+                    className="tt-btn text-xs px-3 py-1.5 rounded border"
+                    style={{ borderColor: "var(--panel-border)", color: "var(--steel)" }}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {adminError && <div className="text-sm px-3 py-2 rounded border" style={{ borderColor: "var(--mw-red)", color: "var(--mw-red)" }}>{adminError}</div>}
+
+                {adminLoading ? (
+                  <div className="flex items-center gap-3 text-sm" style={{ color: "var(--steel)" }}>
+                    <svg viewBox="0 0 24 24" className="w-5 h-5" style={{ animation: "tt-gauge-spin 1.4s linear infinite" }}>
+                      <circle cx="12" cy="12" r="9" fill="none" stroke="#3a3a3a" strokeWidth="2" />
+                      <circle cx="12" cy="12" r="9" fill="none" stroke="var(--caution)" strokeWidth="2" strokeLinecap="round" strokeDasharray="14 42" />
+                    </svg>
+                    Loading shops...
+                  </div>
+                ) : adminShops.length === 0 ? (
+                  <p className="text-sm" style={{ color: "var(--steel)" }}>No shops registered yet.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {adminShops.map((shop) => (
+                      <div
+                        key={shop.id}
+                        className="flex items-center justify-between gap-3 rounded-md px-4 py-3 tt-msg"
+                        style={{ backgroundColor: "var(--panel)", border: "1px solid var(--panel-border)" }}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate" style={{ color: "var(--offwhite)" }}>
+                            {shop.name}{" "}
+                            {session?.shopId === shop.id && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded ml-1" style={{ backgroundColor: "var(--caution)", color: "#161616" }}>
+                                current
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs" style={{ color: "var(--steel)" }}>
+                            {shop.stateLabel} · registered {shop.createdAt ? new Date(shop.createdAt).toLocaleDateString() : "—"}
+                          </p>
+                        </div>
+
+                        {confirmDeleteId === shop.id ? (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs" style={{ color: "var(--mw-red)" }}>Delete for good?</span>
+                            <button
+                              onClick={() => deleteShopEverywhere(shop)}
+                              disabled={deletingId === shop.id}
+                              className="tt-btn text-xs px-3 py-1.5 rounded font-medium disabled:opacity-50"
+                              style={{ backgroundColor: "var(--mw-red)", color: "#161616" }}
+                            >
+                              {deletingId === shop.id ? "Deleting..." : "Confirm"}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="tt-btn text-xs px-3 py-1.5 rounded border"
+                              style={{ borderColor: "var(--panel-border)", color: "var(--steel)" }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(shop.id)}
+                            className="tt-btn flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border shrink-0"
+                            style={{ borderColor: "var(--panel-border)", color: "var(--mw-red)" }}
+                          >
+                            <Trash2 size={13} /> Delete
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
